@@ -1,0 +1,16 @@
+[package]
+name = "matmul_engine"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+alloc = []          # heap-backed DynMatrix
+std = ["alloc"]     # full std (for tests/benches)
+debug-runtime = []  # Enables metrics collection and tracing
+
+[dependencies]
+libm = { version = "0.2", default-features = false }
+
+[dev-dependencies]
+# nothing — all tests use no_std-compatible code
