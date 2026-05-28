@@ -186,6 +186,7 @@ def main():
         
     np.save("artifacts/final_norm.npy", state["final_norm.weight"].numpy())
     np.save("artifacts/lm_head.npy", state["lm_head.weight"].numpy())
+    torch.save(model, "artifacts/tiny_transformer.pt")
     print("Saved all float weights to artifacts/")
     
     # Generate reference debug sequence and activations using a sample prompt

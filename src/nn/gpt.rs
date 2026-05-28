@@ -6,6 +6,8 @@ use crate::nn::embedding::QEmbedding;
 use crate::nn::rmsnorm::QRMSNorm;
 use crate::runtime::kv_cache::QKVCache;
 use crate::nn::transformer::requantize_attention_output_f32;
+#[cfg(feature = "std")]
+use std::eprintln;
 
 pub struct QMultiHeadAttention<const SEQ: usize, const DIM: usize, const HEADS: usize> {}
 
@@ -240,6 +242,15 @@ impl<const SEQ: usize, const DIM: usize, const HIDDEN: usize, const HEADS: usize
             }
         }
 
+        let rescale_factor = self.s_res_in.scale / self.s_res_out.scale;
+        if (rescale_factor - 1.0).abs() > 1e-6 {
+            for i in 0..SEQ {
+                for d in 0..DIM {
+                    x_i32.data[i][d] = libm::roundf(x_i32.data[i][d] as f32 * rescale_factor) as i32;
+                }
+            }
+        }
+
         (debug_scores, debug_probs)
     }
 
@@ -297,6 +308,13 @@ impl<const SEQ: usize, const DIM: usize, const HIDDEN: usize, const HEADS: usize
         for d in 0..DIM {
             x_i32.data[0][d] = x_i32.data[0][d].saturating_add(ff2_out_i32.data[0][d]);
         }
+        
+        let rescale_factor = self.s_res_in.scale / self.s_res_out.scale;
+        if (rescale_factor - 1.0).abs() > 1e-6 {
+            for d in 0..DIM {
+                x_i32.data[0][d] = libm::roundf(x_i32.data[0][d] as f32 * rescale_factor) as i32;
+            }
+        }
     }
 }
 
@@ -348,12 +366,42 @@ impl<
             }
         }
         
+        #[cfg(feature = "std")]
+        let get_absmax = |mat: &Matrix<i32, SEQ, DIM>, scale: f32| -> f32 {
+            let mut max_val = 0;
+            for i in 0..SEQ {
+                for d in 0..DIM {
+                    let val = mat.data[i][d].abs();
+                    if val > max_val { max_val = val; }
+                }
+            }
+            (max_val as f32) * scale
+        };
+        #[cfg(feature = "std")]
+        eprintln!("Rust After embedding - absmax: {:.4}", get_absmax(&x_mat, self.blocks[0].s_res_in.scale));
+        
+        #[cfg(feature = "std")]
+        eprintln!("Rust Before layer 0 - absmax: {:.4}", get_absmax(&x_mat, self.blocks[0].s_res_in.scale));
+        
         let (l0_scores, _) = self.blocks[0].forward(&mut x_mat);
+        
+        #[cfg(feature = "std")]
+        eprintln!("Rust After layer 0 - absmax: {:.4} (using s_res_out)", get_absmax(&x_mat, self.blocks[0].s_res_out.scale));
+
         let (l0_hidden, _) = crate::quant::clip::scale_matrix_i32_to_i8(&x_mat);
         
         let mut last_scores = crate::matrix::Matrix::<f32, SEQ, SEQ>::zeros();
         for i in 1..LAYERS {
+            #[cfg(feature = "std")]
+            eprintln!("Rust Before layer {} - absmax: {:.4} (using prev s_res_out)", i, get_absmax(&x_mat, self.blocks[i-1].s_res_out.scale));
+            #[cfg(feature = "std")]
+            eprintln!("Rust Before layer {} - absmax: {:.4} (using my s_res_in)", i, get_absmax(&x_mat, self.blocks[i].s_res_in.scale));
+
             let (scores, _) = self.blocks[i].forward(&mut x_mat);
+            
+            #[cfg(feature = "std")]
+            eprintln!("Rust After layer {} - absmax: {:.4} (using s_res_out)", i, get_absmax(&x_mat, self.blocks[i].s_res_out.scale));
+
             if i == LAYERS - 1 {
                 last_scores = scores;
             }
