@@ -7,7 +7,7 @@ While many quantization engines exist (e.g., `llama.cpp`, `TFLite`), TinyGPT-INT
 1. **Absolute `no_std` Guarantee**: We do not just avoid standard libraries; we completely eliminate heap allocation (`alloc`, `Vec`, `Box`). The entire transformer architecture—including the dynamic KV cache—lives and operates exclusively on the stack.
 2. **Predictable Determinism**: Bounded execution with deterministic memory requirements means zero runtime OOMs and zero garbage collection pauses.
 3. **Pure Integer Matmul Critical Path**: The compute-heavy core of the transformer relies solely on `i8` x `i8` -> `i32` operations, making it extremely fast on integer-only ALUs.
-4. **Resilient Quantization Math**: We use custom scale-invariant `QRMSNorm` and round-to-nearest integer shifts to preserve PyTorch float32 mathematical parity to a fanatical degree.
+4. **Resilient Quantization Math**: We use custom scale-invariant `QRMSNorm` and round-to-nearest integer shifts to preserve PyTorch float32 mathematical parity to a strict degree.
 
 ## Target Environments & Use Cases
 TinyGPT-INT8 is built for environments where traditional LLM runtimes cannot go:
@@ -17,7 +17,7 @@ TinyGPT-INT8 is built for environments where traditional LLM runtimes cannot go:
 - **Embedded Medical & Smart Sensors**: Environments requiring real-time, highly constrained intelligence operating on minimal battery footprints.
 
 ## Architecture & Engineering
-This engine is built with a fanatical focus on mathematical parity, memory safety, and performance on constrained environments (MCUs, WASM, bare-metal).
+This engine is built with a strong focus on mathematical parity, memory safety, and performance on constrained environments (MCUs, WASM, bare-metal).
 
 ### Highlights:
 - **`no_std` & Zero Heap Allocation**: The entire inference hot-path runs exclusively on the stack. No `Vec`, no `Box`, no `alloc` dependencies. 
@@ -37,35 +37,47 @@ During the migration from a 2-layer to a 3-layer architecture, the INT8 inferenc
 
 ### Hypotheses Tested & Engine Upgrades
 
-We systematically verified and eliminated potential failure points within the integer arithmetic pipeline, resulting in several mathematical correctness improvements to the engine:
+We systematically verified and eliminated potential failure points within the integer arithmetic pipeline, resulting in several mathematical correctness improvements to the engine. The actual history of the regression and subsequent fixes was:
 
-1.  **Q/K/V Projection Precision (Per-Channel vs. Per-Tensor)**
-    *   *Hypothesis:* Per-channel quantization on Q and K weights distorted the uniform scale space required for the $Q \times K^T$ attention dot product.
-    *   *Action:* Reverted Q/K/V weight quantization to per-tensor scaling in the export pipeline to ensure consistent attention magnitudes.
-    *   *Result:* Accuracy unchanged (32%).
-
-2.  **Destructive Residual Amplitude Truncation**
-    *   *Hypothesis:* The `i32` residual stream naturally grows in amplitude with depth (e.g., reaching absmax 60+ by Layer 3). The engine was squashing this down to `i8` bounds (shrinking by 4.8x) without propagating the dynamic shrinkage factor to subsequent projection layers.
-    *   *Action:* Refactored `scale_matrix_i32_to_i8` to compute and return a `dyn_scale` multiplier. This dynamic scale was correctly propagated to `QTensor::scale`, ensuring projection matrices properly interpreted the compressed signal.
-    *   *Result:* Accuracy unchanged (32%).
-
-3.  **Attention Calibration Mismatch (Float Dequantization)**
-    *   *Hypothesis:* The fixed activation scales (`q_scale`, `k_scale`) measured during training calibration severely underestimated the dynamically growing inference signals, silently corrupting the fixed-point attention dot products.
-    *   *Action:* Implemented exact element-wise dequantization inside `QMultiHeadAttention`, computing $Q \times K^T$ in pure `f32` (maintaining the moat since attention scores are a minimal `64x64` computation).
-    *   *Result:* Accuracy unchanged (32%).
-
-4.  **Static Requantization Bottleneck**
-    *   *Hypothesis:* The `requantize_attention_output_f32` phase relied on stale static calibration parameters that could not adapt to deep-layer magnitude shifts.
-    *   *Action:* Replaced static shift-requantization with dynamic, sequence-level `absmax` rescaling.
-    *   *Result:* Accuracy actively worsened (14%), proving that the fixed calibration bounds were actually necessary for the distribution the `i8` weights expected.
+1.  **Baseline**: Started at 79% (2-layer model).
+2.  **Regression**: Dropped to 28–33% when switching to a 3-layer architecture, caused by multiple compounding issues.
+3.  **Per-Layer Calibration Scales**: 
+    *   *Hypothesis:* A single global `max_residual` scale was severely starving early layers of precision (using only 26% of the available `i8` range).
+    *   *Action:* Refactored the engine to compute and load independent `s_res_in` and `s_res_out` scales for each layer.
+    *   *Result:* Accuracy genuinely improved from 33% to **41%**.
+4.  **Residual Scale Handoff**:
+    *   *Hypothesis:* The `i32` residual integers were not physically rescaled at block boundaries when transitioning from `s_res_in` to `s_res_out`, causing massive downstream inflation (e.g., 5.5x inflation).
+    *   *Action:* Added a physical `rescale_factor = s_res_in / s_res_out` multiplication at block exit.
+    *   *Result:* Prevented catastrophic scale explosion, keeping accuracy solid at **41%** (its effect was masked previously by the global scale bug).
+5.  **Static Requantization Bottleneck**:
+    *   *Hypothesis:* The `requantize_attention_output_f32` phase relied on static calibration parameters that could not adapt to deep-layer magnitude shifts.
+    *   *Action:* Attempted dynamic, sequence-level `absmax` rescaling at runtime.
+    *   *Result:* Accuracy actively worsened to **14%**, proving that fixed calibration bounds are mathematically necessary for the distribution the `i8` weights expect. The dynamic approach was reverted.
 
 ### Conclusion: The Limits of PTQ
 
-After proving the runtime's mathematical execution is correct (via targeted floating-point bypasses), the persistent 32% baseline reveals a systemic limitation: **The architecture lacks Quantization-Aware Training (QAT).**
+After resolving all structural scaling and handoff bugs, the model stabilized at 41% accuracy. Further analysis revealed that approximately 1/3 of the remaining mismatches are minor ranking errors (the correct token remains in the top-3). However, the remaining content errors feature large 2× logit gaps, revealing a systemic limitation: **The architecture lacks Quantization-Aware Training (QAT).**
 
-The float32 weights were trained without awareness of integer truncation. In a 2-layer model, the compounded rounding errors are manageable. In a 3-layer model, the errors compound exponentially with depth, shifting the internal activations entirely out of the distribution the later layers were trained to interpret. 
+The float32 weights were trained without awareness of integer truncation. In a 3-layer model, the per-channel rounding errors compound exponentially with depth, shifting the internal activations entirely out of the distribution the later layers were trained to interpret. 
 
 Future deep architectures using this engine require QAT (simulated `FakeQuantize` nodes during the forward pass in PyTorch) to teach the weights robust rounding tolerance, rather than relying exclusively on static PTQ.
+
+## Accuracy Results
+
+| Model          | Layers | d_model | PTQ Accuracy | Notes                          |
+|----------------|--------|---------|--------------|--------------------------------|
+| Character GPT  | 2      | 32      | 79%          | Teacher-forced, 100 tokens     |
+| Character GPT  | 3      | 64      | 41%          | Teacher-forced, 100 tokens     |
+
+### Known limitations of current PTQ implementation
+- Per-tensor activation quantization causes 2× logit suppression on outlier channels
+- Per-channel weight quantization implemented for all linear layers
+- Residual stream uses dynamic per-layer scale handoff (fixed in v0.x)
+- RMSNorm runs in float32 (hybrid quantization, same approach as llama.cpp)
+
+### Planned improvements
+- Per-channel activation quantization (addresses the 40 content errors)
+- Quantization-Aware Training support (expected +15-20% accuracy recovery)
 
 ## Quickstart
 
