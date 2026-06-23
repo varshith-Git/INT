@@ -68,12 +68,14 @@ mod tests {
         
         // We will process token 1
         let x1 = QTensor::new(Matrix::<i8, 1, 2>::from_array([[10, 10]]), params);
-        let out1 = block.forward_incremental(&x1, &mut cache);
+        let out1 = block.forward_incremental(&x1, &mut cache)
+            .expect("cache should not be full at step 1");
         assert_eq!(cache.current_len(), 1);
 
         // process token 2
         let x2 = QTensor::new(Matrix::<i8, 1, 2>::from_array([[5, -5]]), params);
-        let out2 = block.forward_incremental(&x2, &mut cache);
+        let out2 = block.forward_incremental(&x2, &mut cache)
+            .expect("cache should not be full at step 2");
         assert_eq!(cache.current_len(), 2);
 
         // Ensure output values can be read without panic

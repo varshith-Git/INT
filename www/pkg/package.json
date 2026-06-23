@@ -1,0 +1,15 @@
+{
+  "name": "matmul_engine",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "matmul_engine_bg.wasm",
+    "matmul_engine.js",
+    "matmul_engine.d.ts"
+  ],
+  "main": "matmul_engine.js",
+  "types": "matmul_engine.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

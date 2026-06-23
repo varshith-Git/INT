@@ -4,7 +4,7 @@ use crate::quant::{QTensor, QuantParams, RequantShift, clip::clamp_i8};
 use crate::nn::linear::QLinear;
 use crate::nn::attention::QAttention;
 use crate::nn::rmsnorm::QRMSNorm;
-use crate::runtime::kv_cache::QKVCache;
+use crate::runtime::kv_cache::{QKVCache, KVCacheError};
 use crate::nn::softmax::QSoftmax;
 
 /// A quantized transformer execution block (prototype).
@@ -63,11 +63,15 @@ impl<const SEQ: usize, const DIM: usize, const HIDDEN: usize> QTransformerBlock<
     }
 
     /// Incremental token forward pass using a KV Cache.
+    ///
+    /// Returns `Err(KVCacheError::CacheFull)` when the context window (`SEQ`) is
+    /// exhausted instead of panicking — a full context is a normal stop
+    /// condition for an embedded generator, not a crash.
     pub fn forward_incremental(
         &self,
         x: &QTensor<i8, 1, DIM>,
         cache: &mut QKVCache<SEQ, DIM>,
-    ) -> QTensor<i8, 1, DIM> {
+    ) -> Result<QTensor<i8, 1, DIM>, KVCacheError> {
         let norm1_out = self.norm1.forward(x);
 
         let q = self.q_proj.forward(&norm1_out);
@@ -80,10 +84,9 @@ impl<const SEQ: usize, const DIM: usize, const HIDDEN: usize> QTransformerBlock<
             k_arr[d] = k.raw(0, d);
             v_arr[d] = v.raw(0, d);
         }
-        
-        // Return if cache full - wait, the method signature currently does not return Result.
-        // We will expect it.
-        cache.append(&k_arr, &v_arr, k.scale(), v.scale()).expect("KV cache overflow");
+
+        // Propagate context-full as an error rather than panicking.
+        cache.append(&k_arr, &v_arr, k.scale(), v.scale())?;
 
         let attn_scores = QAttention::<SEQ, DIM>::compute_scores_incremental(&q, cache);
         let probs = QSoftmax::softmax_matrix(&attn_scores, cache.current_len());
@@ -98,7 +101,7 @@ impl<const SEQ: usize, const DIM: usize, const HIDDEN: usize> QTransformerBlock<
         let ff1_out = self.ff1.forward(&norm2_out);
         let ff2_out = self.ff2.forward(&ff1_out);
 
-        residual_add_i8(&residual_1, &ff2_out)
+        Ok(residual_add_i8(&residual_1, &ff2_out))
     }
 }
 

@@ -33,6 +33,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+
 pub mod kernel;
 pub mod matrix;
 pub mod quant;
@@ -40,6 +41,9 @@ pub mod nn;
 pub mod runtime;
 pub mod model;
 pub mod examples;
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+pub mod wasm_api;
 
 #[cfg(test)]
 pub mod testing;

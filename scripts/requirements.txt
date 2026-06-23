@@ -1,3 +1,13 @@
-torch
-torchvision
-numpy
+# TinyGPT-INT8 — Python training/quantization dependencies (CPU-only).
+#
+# Only three real deps; everything else the scripts use is stdlib.
+# Pinned to a known-good, mutually-compatible CPU set. torch is the CPU build on
+# every platform (Apple Silicon gets the arm64 CPU/MPS wheel automatically; on
+# Linux/CI use the CPU index — see VENV_RUNBOOK.md).
+#
+# NOTE: torch 2.8 supports numpy 2.x. If you must use torch < 2.2, also pin
+# "numpy<2" — older torch crashes importing against numpy 2.0's ABI.
+
+torch==2.8.0
+torchvision==0.23.0
+numpy>=1.26,<2.3

@@ -1,5 +1,5 @@
 // src/runtime/generator.rs
-use crate::runtime::kv_cache::QKVCache;
+use crate::runtime::kv_cache::{QKVCache, KVCacheError};
 use crate::model::QModel;
 use crate::quant::QTensor;
 use crate::matrix::Matrix;
@@ -31,39 +31,45 @@ impl<
     }
 
     /// Forward pass for a single token using incremental KV cache.
-    pub fn forward_step_incremental(&mut self, token: usize) -> QTensor<i8, 1, VOCAB> {
+    /// Returns `Err(KVCacheError::CacheFull)` if the context window is exhausted.
+    pub fn forward_step_incremental(
+        &mut self,
+        token: usize,
+    ) -> Result<QTensor<i8, 1, VOCAB>, KVCacheError> {
         let x_full = self.model.embedding.lookup_batch([token]);
-        
+
         let mut x_mat = Matrix::<i8, 1, DIM>::zeros();
         for d in 0..DIM {
             x_mat.data[0][d] = x_full.raw(0, d);
         }
         let x = QTensor::new(x_mat, x_full.params);
-        
-        let hidden = self.model.transformer.forward_incremental(&x, &mut self.cache);
-        self.model.output.forward(&hidden)
+
+        let hidden = self.model.transformer.forward_incremental(&x, &mut self.cache)?;
+        Ok(self.model.output.forward(&hidden))
     }
 
     /// Iterative greedy decoding using cached state.
+    /// Stops early if the KV cache fills before `max_len` (returns tokens generated so far).
     pub fn greedy_decode(&mut self, start_token: usize, max_len: usize) -> [usize; SEQ] {
         self.cache.reset();
-        
+
         let mut tokens = [0; SEQ];
         tokens[0] = start_token;
         let limit = max_len.min(SEQ);
-        
+
         for i in 1..limit {
-            let logits = self.forward_step_incremental(tokens[i - 1]);
-            
-            let mut row = [0; VOCAB];
-            for v in 0..VOCAB {
-                row[v] = logits.raw(0, v);
+            match self.forward_step_incremental(tokens[i - 1]) {
+                Ok(logits) => {
+                    let mut row = [0; VOCAB];
+                    for v in 0..VOCAB {
+                        row[v] = logits.raw(0, v);
+                    }
+                    tokens[i] = argmax_logits(&row);
+                }
+                Err(_) => break, // context window full — return what we have
             }
-            
-            let next_token = argmax_logits(&row);
-            tokens[i] = next_token;
         }
-        
+
         tokens
     }
 }
@@ -93,7 +99,7 @@ mod tests {
     #[test]
     fn test_generator_single_step() {
         let mut gen = build_generator();
-        let logits = gen.forward_step_incremental(1);
+        let logits = gen.forward_step_incremental(1).expect("cache not full");
         assert_eq!(logits.rows(), 1);
         assert_eq!(logits.cols(), 4);
         assert_eq!(gen.cache.current_len(), 1);

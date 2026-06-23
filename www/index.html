@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TinyGPT-INT8 · Running in Your Browser</title>
+  <meta name="description" content="A quantized AI brain running entirely in your browser via WebAssembly. No servers. 168KB. Pure integer arithmetic." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:        #080d12;
+      --surface:   #0d1520;
+      --glass:     rgba(13,21,32,0.85);
+      --border:    rgba(0,255,136,0.15);
+      --glow:      #00ff88;
+      --glow-dim:  rgba(0,255,136,0.4);
+      --cyan:      #00d4ff;
+      --text:      #c8d8e8;
+      --text-dim:  #607080;
+      --red:       #ff4466;
+      --font-mono: 'JetBrains Mono', monospace;
+      --font-ui:   'Inter', sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-ui);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* ── Background grid ── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Header ── */
+    header {
+      position: relative; z-index: 10;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 32px;
+      border-bottom: 1px solid var(--border);
+      background: var(--glass);
+      backdrop-filter: blur(20px);
+    }
+
+    .logo {
+      display: flex; align-items: center; gap: 12px;
+      font-family: var(--font-mono);
+    }
+    .logo-name { font-size: 1.2rem; font-weight: 700; color: var(--glow); letter-spacing: -0.5px; }
+    .logo-sub  { font-size: 0.8rem; color: var(--text-dim); }
+
+    .status-pill {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #444;
+      transition: background 0.4s, box-shadow 0.4s;
+    }
+    .status-dot.live {
+      background: var(--glow);
+      box-shadow: 0 0 8px var(--glow-dim);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .status-dot.error { background: var(--red); }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
+    }
+    #status-text { transition: color 0.3s; }
+
+    .meta-badges { display: flex; gap: 8px; }
+    .badge {
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      color: var(--cyan);
+    }
+
+    /* ── Main layout ── */
+    main {
+      position: relative; z-index: 1;
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1.4fr;
+      grid-template-rows: auto auto;
+      gap: 20px;
+      padding: 24px 32px;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* ── Glass panel ── */
+    .panel {
+      background: var(--glass);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      backdrop-filter: blur(20px);
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--text-dim);
+    }
+    .panel-header .dot { width:10px; height:10px; border-radius:50%; }
+    .dot-r { background:#ff5f57; }
+    .dot-y { background:#febc2e; }
+    .dot-g { background:#28c840; }
+
+    /* ── Neural net canvas ── */
+    #nn-canvas {
+      display: block;
+      width: 100%;
+      height: 320px;
+    }
+
+    /* ── Terminal / Input panel ── */
+    .input-panel { grid-column: 2; grid-row: 1 / 3; display: flex; flex-direction: column; }
+
+    #terminal-output {
+      flex: 1;
+      padding: 20px;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.7;
+      color: var(--glow);
+      min-height: 200px;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    #terminal-output .dim  { color: var(--text-dim); }
+    #terminal-output .cyan { color: var(--cyan); }
+    #terminal-output .err  { color: var(--red); }
+
+    .input-area {
+      padding: 0 20px 12px;
+      position: relative;
+    }
+    .input-label {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+    #text-input {
+      width: 100%;
+      background: rgba(0,255,136,0.04);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      color: var(--glow);
+      outline: none;
+      caret-color: var(--glow);
+      resize: none;
+      height: 100px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    #text-input:focus {
+      border-color: var(--glow-dim);
+      box-shadow: 0 0 20px rgba(0,255,136,0.08);
+    }
+    #text-input::placeholder { color: var(--text-dim); }
+
+    .controls {
+      display: flex; gap: 10px;
+      padding: 12px 20px;
+    }
+    button {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      cursor: pointer;
+      border-radius: 6px;
+      padding: 8px 16px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      transition: all 0.2s;
+    }
+    button:hover { border-color: var(--glow-dim); color: var(--glow); }
+    button.primary {
+      background: rgba(0,255,136,0.1);
+      border-color: var(--glow-dim);
+      color: var(--glow);
+    }
+    button.primary:hover { background: rgba(0,255,136,0.2); }
+    button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* ── Predictions panel ── */
+    .predictions-panel { grid-column: 1; }
+
+    #predictions {
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .pred-empty {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      text-align: center;
+      padding: 20px 0;
+    }
+
+    .pred-row {
+      display: flex; align-items: center; gap: 12px;
+      cursor: pointer;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .pred-row:hover {
+      border-color: var(--border);
+      background: rgba(0,255,136,0.04);
+    }
+    .pred-char {
+      font-family: var(--font-mono);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--glow);
+      width: 28px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .pred-bar-track {
+      flex: 1;
+      height: 6px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .pred-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, var(--glow), var(--cyan));
+      transition: width 0.2s ease;
+    }
+    .pred-prob {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      width: 44px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .pred-rank {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      width: 20px;
+      flex-shrink: 0;
+    }
+
+    /* ── Loading overlay ── */
+    #loading {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 24px;
+      z-index: 100;
+      transition: opacity 0.5s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    .loading-brain {
+      font-size: 3rem;
+      animation: spin 3s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-title {
+      font-family: var(--font-mono);
+      font-size: 1.1rem;
+      color: var(--glow);
+    }
+    .loading-sub {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+    .loading-bar-track {
+      width: 280px; height: 4px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .loading-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, var(--glow), var(--cyan));
+      animation: load-sweep 1.4s ease-in-out infinite;
+    }
+    @keyframes load-sweep {
+      0%   { width: 0%; margin-left: 0%; }
+      50%  { width: 60%; margin-left: 20%; }
+      100% { width: 0%; margin-left: 100%; }
+    }
+
+    /* ── Footer ── */
+    footer {
+      position: relative; z-index: 10;
+      display: flex; align-items: center; justify-content: center; gap: 20px;
+      padding: 14px 32px;
+      border-top: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      color: var(--text-dim);
+    }
+    footer span { opacity: 0.5; }
+
+    /* ── Latency display ── */
+    #latency { font-family: var(--font-mono); font-size: 0.72rem; color: var(--cyan); }
+  </style>
+</head>
+<body>
+
+<!-- Loading screen -->
+<div id="loading">
+  <div class="loading-brain">🧠</div>
+  <div class="loading-title">Loading TinyGPT-INT8 into your browser</div>
+  <div class="loading-bar-track"><div class="loading-bar-fill"></div></div>
+  <div class="loading-sub" id="load-status">Fetching 168KB model…</div>
+</div>
+
+<!-- Header -->
+<header>
+  <div class="logo">
+    <div>
+      <div class="logo-name">TinyGPT<span style="color:var(--cyan)">-INT8</span></div>
+      <div class="logo-sub">WebAssembly · Character Language Model</div>
+    </div>
+  </div>
+  <div class="status-pill">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">Loading…</span>
+  </div>
+  <div class="meta-badges">
+    <div class="badge">168KB</div>
+    <div class="badge">no_std Rust</div>
+    <div class="badge">INT8</div>
+    <div class="badge">zero servers</div>
+  </div>
+</header>
+
+<!-- Main -->
+<main>
+
+  <!-- Neural net visualisation -->
+  <div class="panel" style="grid-column:1; grid-row:1;">
+    <div class="panel-header">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      &nbsp;Neural Network · 3 Layers · 64-dim
+    </div>
+    <canvas id="nn-canvas"></canvas>
+  </div>
+
+  <!-- Predictions -->
+  <div class="panel predictions-panel">
+    <div class="panel-header">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      &nbsp;Next Character Predictions &nbsp;<span id="latency"></span>
+    </div>
+    <div id="predictions">
+      <div class="pred-empty">Type something to see predictions…</div>
+    </div>
+  </div>
+
+  <!-- Input + Terminal -->
+  <div class="panel input-panel">
+    <div class="panel-header">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      &nbsp;Input · max 64 characters
+    </div>
+    <div id="terminal-output">
+      <span class="dim">// TinyGPT-INT8 — 3-layer transformer, 168K params</span><br>
+      <span class="dim">// Runs entirely in this tab. No network requests after load.</span><br>
+      <span class="dim">// Trained on English text: letters, punctuation, spaces.</span><br>
+      <br>
+      <span class="cyan">initialising…</span>
+    </div>
+    <div class="input-area">
+      <div class="input-label">// type here — model predicts the next character</div>
+      <textarea id="text-input" placeholder="Start typing… e.g. 'The quick'" disabled spellcheck="false"></textarea>
+    </div>
+    <div class="controls">
+      <button class="primary" id="btn-accept" disabled title="Accept top prediction (Tab)">Tab → accept top</button>
+      <button id="btn-clear">clear</button>
+      <button id="btn-sample">auto-complete ×5</button>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <span>TinyGPT-INT8</span> · 168KB binary ·
+  <span>3 transformer layers</span> · 64-dim · 4 heads ·
+  <span>61-char vocab</span> · no heap allocation · pure integer arithmetic
+</footer>
+
+<!-- WASM bootstrap -->
+<script type="module">
+  import init, { init_model, predict, vocab_size } from './pkg/matmul_engine.js';
+
+  // ── Vocabulary (must match artifacts/vocab.json) ──
+  const ITOS = [
+    '\n',' ','!','&',"'",',','-','.',':', ';','?',
+    'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y',
+    'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z'
+  ];
+  const STOI = {};
+  ITOS.forEach((ch, i) => STOI[ch] = i);
+
+  function encodeText(text) {
+    const ids = [];
+    for (const ch of text) {
+      if (ch in STOI) ids.push(STOI[ch]);
+    }
+    return new Uint8Array(ids.slice(-64)); // last 64 chars
+  }
+
+  function softmax(logits) {
+    const max = Math.max(...logits);
+    const e = logits.map(x => Math.exp(x - max));
+    const sum = e.reduce((a, b) => a + b, 0);
+    return e.map(x => x / sum);
+  }
+
+  function charLabel(ch) {
+    if (ch === ' ')  return '⎵ space';
+    if (ch === '\n') return '↵ newline';
+    return `'${ch}'`;
+  }
+
+  // ── DOM refs ──
+  const loadingEl   = document.getElementById('loading');
+  const loadStatus  = document.getElementById('load-status');
+  const statusDot   = document.getElementById('status-dot');
+  const statusText  = document.getElementById('status-text');
+  const termOut     = document.getElementById('terminal-output');
+  const textInput   = document.getElementById('text-input');
+  const predBox     = document.getElementById('predictions');
+  const btnAccept   = document.getElementById('btn-accept');
+  const btnClear    = document.getElementById('btn-clear');
+  const btnSample   = document.getElementById('btn-sample');
+  const latencyEl   = document.getElementById('latency');
+
+  function log(msg, cls = '') {
+    const line = document.createElement('span');
+    if (cls) line.className = cls;
+    line.textContent = msg;
+    termOut.appendChild(line);
+    termOut.appendChild(document.createElement('br'));
+    termOut.scrollTop = termOut.scrollHeight;
+  }
+
+  function setStatus(state, msg) {
+    statusDot.className = 'status-dot ' + state;
+    statusText.textContent = msg;
+  }
+
+  // ── Init ──
+  async function run() {
+    try {
+      loadStatus.textContent = 'Compiling WebAssembly module…';
+      await init();
+
+      loadStatus.textContent = 'Fetching model binary (168KB)…';
+      const resp = await fetch('./tiny_transformer_int8.bin');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const buf  = await resp.arrayBuffer();
+
+      loadStatus.textContent = 'Initialising model…';
+      const ok = init_model(new Uint8Array(buf));
+      if (!ok) throw new Error('Model init failed — binary may be wrong shape');
+
+      // Hide loading screen
+      loadingEl.classList.add('hidden');
+      setTimeout(() => loadingEl.style.display = 'none', 600);
+
+      log('Model loaded OK', 'cyan');
+      log(`vocab=${vocab_size()} · seq=64 · dim=64 · layers=3`, 'dim');
+      log('Type in the box below ↓', 'dim');
+
+      setStatus('live', 'Model running locally');
+      textInput.disabled = false;
+      btnAccept.disabled = false;
+      textInput.focus();
+
+    } catch (err) {
+      loadStatus.textContent = '❌ ' + err.message;
+      loadStatus.style.color = '#ff4466';
+      setStatus('error', 'Load failed');
+      log('Error: ' + err.message, 'err');
+    }
+  }
+
+  // ── Predict ──
+  let topPredictions = [];
+
+  function runPredict() {
+    const text = textInput.value;
+    if (!text) { predBox.innerHTML = '<div class="pred-empty">Type something…</div>'; return; }
+
+    const ids = encodeText(text);
+    if (ids.length === 0) return;
+
+    const t0 = performance.now();
+    const rawLogits = predict(ids);
+    const dt = (performance.now() - t0).toFixed(1);
+
+    latencyEl.textContent = `· ${dt}ms`;
+
+    const probs = softmax(Array.from(rawLogits));
+    const indexed = probs.map((p, i) => ({ p, i }))
+                         .sort((a, b) => b.p - a.p)
+                         .slice(0, 7);
+
+    topPredictions = indexed;
+
+    predBox.innerHTML = '';
+    indexed.forEach((item, rank) => {
+      const ch   = ITOS[item.i];
+      const pct  = (item.p * 100).toFixed(1);
+      const row  = document.createElement('div');
+      row.className = 'pred-row';
+      row.innerHTML = `
+        <span class="pred-rank">#${rank+1}</span>
+        <span class="pred-char">${charLabel(ch)}</span>
+        <div class="pred-bar-track">
+          <div class="pred-bar-fill" style="width:${Math.min(100, item.p * 400)}%"></div>
+        </div>
+        <span class="pred-prob">${pct}%</span>
+      `;
+      row.addEventListener('click', () => { textInput.value += ch; runPredict(); textInput.focus(); });
+      predBox.appendChild(row);
+    });
+  }
+
+  textInput.addEventListener('input', runPredict);
+
+  // Tab to accept top prediction
+  textInput.addEventListener('keydown', e => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (topPredictions.length > 0) {
+        textInput.value += ITOS[topPredictions[0].i];
+        runPredict();
+      }
+    }
+  });
+
+  btnAccept.addEventListener('click', () => {
+    if (topPredictions.length > 0) {
+      textInput.value += ITOS[topPredictions[0].i];
+      runPredict(); textInput.focus();
+    }
+  });
+
+  btnClear.addEventListener('click', () => {
+    textInput.value = '';
+    predBox.innerHTML = '<div class="pred-empty">Type something to see predictions…</div>';
+    latencyEl.textContent = '';
+    topPredictions = [];
+    textInput.focus();
+  });
+
+  btnSample.addEventListener('click', () => {
+    for (let i = 0; i < 5; i++) {
+      if (topPredictions.length === 0) break;
+      // Sample from top-3 with temperature
+      const top3 = topPredictions.slice(0, 3);
+      const r = Math.random() * top3.reduce((s, x) => s + x.p, 0);
+      let acc = 0;
+      for (const item of top3) {
+        acc += item.p;
+        if (r <= acc) { textInput.value += ITOS[item.i]; break; }
+      }
+      runPredict();
+    }
+    textInput.focus();
+  });
+
+  // ── Neural net animation ──
+  const canvas = document.getElementById('nn-canvas');
+  const ctx    = canvas.getContext('2d');
+
+  function resizeCanvas() {
+    canvas.width  = canvas.offsetWidth  * devicePixelRatio;
+    canvas.height = canvas.offsetHeight * devicePixelRatio;
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+  }
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  // Layer sizes: input(8) → layer0(8) → layer1(8) → layer2(8) → output(8)
+  const LAYERS_DISPLAY = [8, 10, 10, 10, 8];
+  let activations = LAYERS_DISPLAY.map(n => new Array(n).fill(0));
+  let tick = 0;
+
+  function drawNN(ts) {
+    const W = canvas.offsetWidth;
+    const H = canvas.offsetHeight;
+    ctx.clearRect(0, 0, W, H);
+
+    tick = ts / 1000;
+
+    // Animate activations
+    for (let l = 0; l < LAYERS_DISPLAY.length; l++) {
+      for (let n = 0; n < LAYERS_DISPLAY[l]; n++) {
+        activations[l][n] = 0.3 + 0.7 * Math.abs(Math.sin(tick * 1.3 + l * 1.7 + n * 0.9));
+      }
+    }
+
+    const xStep = W / (LAYERS_DISPLAY.length + 1);
+
+    // Draw connections
+    for (let l = 0; l < LAYERS_DISPLAY.length - 1; l++) {
+      const x1 = xStep * (l + 1);
+      const x2 = xStep * (l + 2);
+      for (let n1 = 0; n1 < LAYERS_DISPLAY[l]; n1++) {
+        const y1 = H / 2 + (n1 - (LAYERS_DISPLAY[l]-1)/2) * (H / (LAYERS_DISPLAY[l]+2));
+        for (let n2 = 0; n2 < LAYERS_DISPLAY[l+1]; n2++) {
+          const y2 = H / 2 + (n2 - (LAYERS_DISPLAY[l+1]-1)/2) * (H / (LAYERS_DISPLAY[l+1]+2));
+          const alpha = 0.04 + 0.08 * activations[l][n1] * activations[l+1][n2];
+          ctx.beginPath();
+          ctx.strokeStyle = `rgba(0,212,255,${alpha})`;
+          ctx.lineWidth = 0.5;
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Draw nodes
+    for (let l = 0; l < LAYERS_DISPLAY.length; l++) {
+      const x = xStep * (l + 1);
+      for (let n = 0; n < LAYERS_DISPLAY[l]; n++) {
+        const y = H / 2 + (n - (LAYERS_DISPLAY[l]-1)/2) * (H / (LAYERS_DISPLAY[l]+2));
+        const act = activations[l][n];
+        const r = 5 + act * 3;
+
+        // Glow
+        const grd = ctx.createRadialGradient(x, y, 0, x, y, r * 3);
+        grd.addColorStop(0, `rgba(0,255,136,${act * 0.3})`);
+        grd.addColorStop(1, 'rgba(0,255,136,0)');
+        ctx.beginPath();
+        ctx.arc(x, y, r * 3, 0, Math.PI * 2);
+        ctx.fillStyle = grd;
+        ctx.fill();
+
+        // Core
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(0,255,136,${0.4 + act * 0.6})`;
+        ctx.fill();
+      }
+    }
+
+    requestAnimationFrame(drawNN);
+  }
+  requestAnimationFrame(drawNN);
+
+  run();
+</script>
+
+</body>
+</html>

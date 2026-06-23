@@ -1,7 +1,21 @@
 /target/
 /venv/
+/pkg/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Training data (large, regenerate with prepare_text.py)
 data/
-artifacts/
+
+# Generated artifacts — regenerate with the pipeline scripts
+# KEEP in git: tiny_transformer_int8.bin (the shipped model)
+artifacts/*.npy
+artifacts/*.pt
+artifacts/*.bin
+!artifacts/tiny_transformer_int8.bin
+artifacts/quantization_report.json
+
+# Debug dumps (never commit these)
+patch_*.py
+eval_output*.txt

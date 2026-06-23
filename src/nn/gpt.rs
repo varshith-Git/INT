@@ -294,7 +294,7 @@ impl<const SEQ: usize, const DIM: usize, const HIDDEN: usize, const HEADS: usize
         let x_i8_2 = QTensor::new(x_i8_data2, QuantParams::symmetric(self.s_res_in.scale * dyn_scale2));
         let norm2_out = self.norm2.forward(&x_i8_2);
         let mut ff1_out = self.ff1.forward_dynamic(&norm2_out);
-        
+
         // ReLU
         for d in 0..HIDDEN {
             if ff1_out.data.data[0][d] < 0 {

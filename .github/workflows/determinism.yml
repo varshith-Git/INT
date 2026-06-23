@@ -1,0 +1,71 @@
+name: cross-arch-determinism
+
+# Proves the moat: the same code must produce a byte-identical fingerprint on
+# every architecture. Each job runs the SAME golden test
+# (tests/determinism_golden.rs); the test asserts the fingerprint equals a pinned
+# GOLDEN constant. If any ISA computes a different value, that job fails — which
+# is exactly the signal we want.
+#
+# Captured golden (aarch64): 0x09045538e9926ea4
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  TEST: determinism_golden
+
+jobs:
+  # Native runners: x86_64 (Linux, Windows) + arm64 (macOS).
+  native:
+    name: native ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustc -vV   # records host triple in the log
+      - run: cargo test --test ${{ env.TEST }} -- --nocapture
+
+  # Emulated ISAs via QEMU: aarch64 + riscv64 Linux. setup-cross-toolchain wires
+  # the linker + qemu runner so plain `cargo test --target ...` executes the test
+  # binary under emulation.
+  emulated:
+    name: emulated ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu
+          - riscv64gc-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
+      - run: cargo test --target ${{ matrix.target }} --test ${{ env.TEST }} -- --nocapture
+
+  # WebAssembly (the "deterministic browser/edge inference" claim), run under
+  # wasmtime via WASI.
+  wasm:
+    name: wasm32-wasip1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+        run: cargo test --target wasm32-wasip1 --test ${{ env.TEST }} -- --nocapture

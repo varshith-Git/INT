@@ -3,14 +3,23 @@ name = "matmul_engine"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [features]
 default = []
 alloc = []          # heap-backed DynMatrix
 std = ["alloc"]     # full std (for tests/benches)
 debug-runtime = []  # Enables metrics collection and tracing
+wasm = ["wasm-bindgen", "alloc"]  # WebAssembly browser target
 
 [dependencies]
 libm = { version = "0.2", default-features = false }
+wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
 # nothing — all tests use no_std-compatible code
+
+[profile.release]
+opt-level = "z"   # minimise binary size for WASM
+lto = true
